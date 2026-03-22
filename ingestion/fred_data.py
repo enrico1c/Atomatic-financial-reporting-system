@@ -40,7 +40,10 @@ class FREDIngestion(BaseIngestion):
         self.logger.info(f"Fetching FRED series: {series_id} ({name})")
         try:
             resp = self._get(FRED_BASE_URL, params={"id": series_id})
-            df = pd.read_csv(io.StringIO(resp.text), parse_dates=["DATE"])
+            df = pd.read_csv(io.StringIO(resp.text))
+            if "DATE" not in df.columns:
+                raise ValueError(f"Expected 'DATE' column, got: {list(df.columns)}")
+            df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
             df.rename(columns={"DATE": "date", series_id: name}, inplace=True)
             # FRED uses "." for missing values
             df[name] = pd.to_numeric(df[name], errors="coerce")

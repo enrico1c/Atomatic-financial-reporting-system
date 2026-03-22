@@ -50,7 +50,7 @@ ECB_SERIES = {
     "ecb_main_refi_rate":   "FM/B.U2.EUR.4F.KR.MRR_FR.LEV",
     "ecb_deposit_rate":     "FM/B.U2.EUR.4F.KR.DFR.LEV",
     "ecb_hicp_inflation":   "ICP/M.U2.N.000000.4.ANR",
-    "euribor_3m":           "FM/B.U2.EUR.RT.MM.EURIBOR3MD_.HSTA",
+    "euribor_3m":           "FM/M.U2.EUR.RT.MM.EURIBOR3MD_.HSTA",
 }
 
 ECB_API_BASE = "https://data-api.ecb.europa.eu/service/data"
