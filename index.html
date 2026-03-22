@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Financial Analytics Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:      #0d1117;
+      --surface: #161b22;
+      --border:  #30363d;
+      --text:    #e6edf3;
+      --muted:   #8b949e;
+      --green:   #3fb950;
+      --red:     #f85149;
+      --yellow:  #d29922;
+      --blue:    #58a6ff;
+      --purple:  #bc8cff;
+      --orange:  #f0883e;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+    }
+
+    /* ─── Page shell ───────────────────────────────────────────────── */
+    #shell {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ─── Header ───────────────────────────────────────────────────── */
+    #hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex: 0 0 auto;
+      gap: 12px;
+    }
+    #hdr h1 { font-size: 14px; font-weight: 600; color: var(--blue); letter-spacing: .3px; flex-shrink: 0; }
+    #status  { display: flex; gap: 14px; font-size: 11px; color: var(--muted); }
+    #ws-dot  { font-weight: 700; }
+    #ws-dot.on  { color: var(--green); }
+    #ws-dot.off { color: var(--red); }
+
+    /* ticker search */
+    #ticker-form {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+    #ticker-input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 10px;
+      width: 96px;
+      text-transform: uppercase;
+      outline: none;
+      transition: border-color .15s;
+    }
+    #ticker-input::placeholder { color: var(--muted); font-weight: 400; text-transform: none; }
+    #ticker-input:focus { border-color: var(--blue); }
+    #ticker-btn {
+      background: var(--blue);
+      color: #0d1117;
+      border: none;
+      border-radius: 5px;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 12px;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    #ticker-btn:hover { opacity: .85; }
+    #ticker-err { font-size: 10px; color: var(--red); display: none; }
+
+    /* ─── Ticker tape ──────────────────────────────────────────────── */
+    #tape-wrap {
+      overflow: hidden;
+      background: rgba(0,0,0,.28);
+      border-bottom: 1px solid var(--border);
+      padding: 3px 0;
+      flex: 0 0 auto;
+    }
+    #tape {
+      display: inline-flex;
+      gap: 28px;
+      white-space: nowrap;
+      padding: 0 16px;
+      animation: marquee 55s linear infinite;
+    }
+    @keyframes marquee { from { transform: translateX(0) } to { transform: translateX(-50%) } }
+    .ti { font-size: 11px; }
+    .ti b { font-weight: 700; color: var(--text); margin-right: 4px; }
+    .up   { color: var(--green); }
+    .dn   { color: var(--red); }
+    .fl   { color: var(--muted); }
+
+    /* ─── Body: table left + charts right ─────────────────────────── */
+    #body {
+      flex: 1 1 0;
+      display: grid;
+      grid-template-columns: 42% 1fr;
+      grid-template-rows: 1fr;
+      gap: 10px;
+      padding: 10px 14px 0 14px;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    /* ─── Left column ──────────────────────────────────────────────── */
+    #left {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .card-hdr {
+      padding: 7px 12px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,.18);
+      flex: 0 0 auto;
+    }
+    .card-hdr em { color: var(--blue); font-style: normal; font-size: 10px;
+                   font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 6px; }
+
+    /* Table card fills left column */
+    #tbl-card { flex: 1 1 0; }
+
+    #tbl-scroll { overflow-y: auto; flex: 1 1 0; min-height: 0; }
+
+    table { width: 100%; border-collapse: collapse; }
+
+    thead th {
+      position: sticky; top: 0; z-index: 2;
+      padding: 6px 9px;
+      font-size: 10px; font-weight: 600;
+      color: var(--muted);
+      text-align: right;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      white-space: nowrap;
+    }
+    thead th:first-child { text-align: left; }
+
+    tbody tr { cursor: pointer; transition: background .1s; }
+    tbody tr:hover    { background: rgba(88,166,255,.06); }
+    tbody tr.sel      { background: rgba(88,166,255,.13);
+                        box-shadow: inset 2px 0 0 var(--blue); }
+
+    tbody td {
+      padding: 5px 9px;
+      text-align: right;
+      border-bottom: 1px solid rgba(48,54,61,.55);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      font-size: 11px;
+    }
+    tbody td:first-child { text-align: left; font-weight: 700; color: var(--blue); }
+
+    .bull { color: var(--green); font-weight: 600; }
+    .bear { color: var(--red);   font-weight: 600; }
+    .neut { color: var(--yellow); }
+
+    @keyframes fup   { 0%,100%{background:transparent} 50%{background:rgba(63,185,80,.2)} }
+    @keyframes fdn   { 0%,100%{background:transparent} 50%{background:rgba(248,81,73,.2)} }
+    .fup { animation: fup .55s ease; }
+    .fdn { animation: fdn .55s ease; }
+
+    /* ─── Right column: 3 charts ───────────────────────────────────── */
+    #right {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .chart-card { flex: 1 1 0; }
+
+    .chart-card canvas {
+      flex: 1 1 0;
+      min-height: 0;
+      display: block;
+      width: 100% !important;
+      padding: 4px 8px 6px;
+    }
+
+    /* ─── Macro strip (bottom, full width) ────────────────────────── */
+    #macro {
+      flex: 0 0 auto;
+      display: flex;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      gap: 1px;
+      background: var(--border);
+      border-top: 1px solid var(--border);
+      margin: 8px 14px 0 14px;
+    }
+    #macro::-webkit-scrollbar { height: 3px; }
+    #macro::-webkit-scrollbar-thumb { background: var(--border); }
+
+    .mc {
+      background: var(--surface);
+      padding: 5px 12px;
+      flex: 1 1 120px;
+      min-width: 100px;
+    }
+    .mc .lbl { font-size: 9px; color: var(--muted); text-transform: uppercase;
+               letter-spacing: .4px; white-space: nowrap; }
+    .mc .val { font-size: 13px; font-weight: 700;
+               font-variant-numeric: tabular-nums; margin-top: 1px; }
+
+    /* ─── Footer ───────────────────────────────────────────────────── */
+    #ftr {
+      flex: 0 0 auto;
+      padding: 3px 16px;
+      text-align: right;
+      font-size: 9px;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+<div id="shell">
+
+  <!-- Header -->
+  <div id="hdr">
+    <h1>&#9654; Financial Analytics Dashboard</h1>
+
+    <!-- Ticker search -->
+    <form id="ticker-form" onsubmit="return analyzeTicker()">
+      <input id="ticker-input" type="text" placeholder="e.g. TSLA" maxlength="8" autocomplete="off" spellcheck="false" />
+      <button id="ticker-btn" type="submit">Analyse</button>
+      <span id="ticker-err">Not in stream</span>
+    </form>
+
+    <div id="status">
+      <span>Updates: <strong id="seq">0</strong></span>
+      <span>Server: <strong id="ts">—</strong></span>
+      <span id="ws-dot" class="off">&#9679; Disconnected</span>
+    </div>
+  </div>
+
+  <!-- Ticker tape -->
+  <div id="tape-wrap">
+    <div id="tape">
+      <span class="ti"><b>—</b>connecting…</span>
+      <span class="ti"><b>—</b>connecting…</span>
+    </div>
+  </div>
+
+  <!-- Main body -->
+  <div id="body">
+
+    <!-- LEFT: table -->
+    <div id="left">
+      <div class="card" id="tbl-card">
+        <div class="card-hdr">Live Prices &amp; ML Projections <em>&#8592; click row to analyse</em></div>
+        <div id="tbl-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Price</th>
+                <th>1m%</th>
+                <th>Trend</th>
+                <th>&#8593;1d%</th>
+                <th>Px 1d</th>
+                <th>&#8593;5d%</th>
+                <th>Px 5d</th>
+              </tr>
+            </thead>
+            <tbody id="tbody">
+              <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:28px 0">
+                Connecting to real-time stream…
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: 3 stacked charts -->
+    <div id="right">
+
+      <div class="card chart-card">
+        <div class="card-hdr">Market — SPY &amp; QQQ</div>
+        <canvas id="c-market"></canvas>
+      </div>
+
+      <div class="card chart-card">
+        <div class="card-hdr" id="model-hdr">Model — <em>select a ticker</em></div>
+        <canvas id="c-model"></canvas>
+      </div>
+
+      <div class="card chart-card">
+        <div class="card-hdr" id="comp-hdr">Comparison — Market vs Model</div>
+        <canvas id="c-comp"></canvas>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Macro strip -->
+  <div id="macro">
+    <div class="mc"><div class="lbl">Loading</div><div class="val">—</div></div>
+  </div>
+
+  <!-- Footer -->
+  <div id="ftr">Data via Yahoo Finance · ML projections are illustrative, not financial advice.</div>
+
+</div><!-- /shell -->
+
+<script>
+// ── Constants ──────────────────────────────────────────────────────────────
+const BUF = 120;
+
+// ── State ──────────────────────────────────────────────────────────────────
+let prevPx   = {};          // ticker → last price (flash)
+let pxHist   = {};          // ticker → [{t,v}]
+let prHist   = {};          // ticker → [{t,p1d,p5d}]
+let normBase = {};          // ticker → first price
+let selected = null;
+let updateN  = 0;
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+const $   = id => document.getElementById(id);
+const f2  = v  => v == null ? '—' : Number(v).toFixed(2);
+const fp  = v  => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+const dir = v  => v == null ? 'fl' : v > 0 ? 'up' : v < 0 ? 'dn' : 'fl';
+
+function ring(arr, item) { arr.push(item); if (arr.length > BUF) arr.shift(); }
+
+// ── Chart.js global defaults ───────────────────────────────────────────────
+Chart.defaults.color       = '#8b949e';
+Chart.defaults.borderColor = '#30363d';
+Chart.defaults.font.size   = 9;
+Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif";
+
+const SCALE_OPTS = {
+  x: { ticks: { maxTicksLimit: 7, maxRotation: 0 }, grid: { color: 'rgba(48,54,61,.45)' } },
+  y: { ticks: { maxTicksLimit: 5 }, grid: { color: 'rgba(48,54,61,.45)' } }
+};
+
+const BASE_CFG = {
+  responsive: true,
+  maintainAspectRatio: false,
+  animation: { duration: 150 },
+  interaction: { mode: 'index', intersect: false },
+  plugins: {
+    legend: { labels: { boxWidth: 9, padding: 10 } },
+    tooltip: {
+      backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1,
+      titleColor: '#e6edf3', bodyColor: '#8b949e', padding: 7
+    }
+  },
+  scales: SCALE_OPTS
+};
+
+function cfg(extra) {
+  return Object.assign({}, BASE_CFG, extra,
+    { scales: Object.assign({}, SCALE_OPTS, extra.scales || {}),
+      plugins: Object.assign({}, BASE_CFG.plugins, extra.plugins || {}) });
+}
+
+function ds(label, color, extra) {
+  return Object.assign({
+    label, data: [],
+    borderColor: color, backgroundColor: 'transparent',
+    borderWidth: 1.5, pointRadius: 0, tension: 0.3
+  }, extra || {});
+}
+
+// ── Market chart ───────────────────────────────────────────────────────────
+const mktChart = new Chart($('c-market'), {
+  type: 'line',
+  data: { labels: [], datasets: [
+    ds('SPY', '#58a6ff', { backgroundColor: 'rgba(88,166,255,.07)', fill: true }),
+    ds('QQQ', '#bc8cff', { yAxisID: 'y2' })
+  ]},
+  options: cfg({ scales: {
+    ...SCALE_OPTS,
+    y:  { ...SCALE_OPTS.y, position: 'left',  title: { display: true, text: 'SPY ($)', color: '#58a6ff', font:{size:9} } },
+    y2: { ...SCALE_OPTS.y, position: 'right', title: { display: true, text: 'QQQ ($)', color: '#bc8cff', font:{size:9} },
+          grid: { drawOnChartArea: false } }
+  }})
+});
+
+// ── Model chart ────────────────────────────────────────────────────────────
+const mdlChart = new Chart($('c-model'), {
+  type: 'line',
+  data: { labels: [], datasets: [
+    ds('Actual',  '#3fb950', { backgroundColor: 'rgba(63,185,80,.07)', fill: true }),
+    ds('Proj 1d', '#f0883e', { borderDash:[5,4], pointRadius:3 }),
+    ds('Proj 5d', '#d29922', { borderDash:[9,4], pointRadius:3 })
+  ]},
+  options: cfg({ scales: { ...SCALE_OPTS,
+    y: { ...SCALE_OPTS.y, title: { display: true, text: 'Price ($)', color:'#8b949e', font:{size:9} } }
+  }})
+});
+
+// ── Comparison chart ───────────────────────────────────────────────────────
+const cmpChart = new Chart($('c-comp'), {
+  type: 'line',
+  data: { labels: [], datasets: [
+    ds('SPY (market)', '#58a6ff', { backgroundColor:'rgba(88,166,255,.07)', fill:true }),
+    ds('Ticker (actual)',  '#3fb950'),
+    ds('Model proj path', '#f0883e', { borderDash:[6,4], pointRadius:2 })
+  ]},
+  options: cfg({ scales: { ...SCALE_OPTS,
+    y: { ...SCALE_OPTS.y, title: { display:true, text:'Normalised (base=100)', color:'#8b949e', font:{size:9} } }
+  }})
+});
+
+// ── Refresh helpers ────────────────────────────────────────────────────────
+function norm(arr, base) {
+  if (!base) return arr.map(() => null);
+  return arr.map(v => v == null ? null : +((v / base * 100).toFixed(3)));
+}
+
+function refreshMarket() {
+  const spy = pxHist['SPY'] || [], qqq = pxHist['QQQ'] || [];
+  const lbl = (spy.length >= qqq.length ? spy : qqq).map(d => d.t);
+  mktChart.data.labels           = lbl;
+  mktChart.data.datasets[0].data = spy.map(d => d.v);
+  mktChart.data.datasets[1].data = qqq.map(d => d.v);
+  mktChart.update('none');
+}
+
+function refreshModel() {
+  if (!selected) return;
+  const hist = pxHist[selected] || [];
+  const proj = prHist[selected] || [];
+
+  const lbl  = hist.map(d => d.t);
+  const act  = hist.map(d => d.v);
+  const p1   = new Array(hist.length).fill(null);
+  const p5   = new Array(hist.length).fill(null);
+
+  if (proj.length && hist.length) {
+    const lat = proj[proj.length - 1];
+    const n   = hist.length - 1;
+    p1[n] = hist[n].v;
+    lbl.push('→1d'); act.push(null); p1.push(lat.p1d); p5.push(null);
+    lbl.push('→5d'); act.push(null); p1.push(null);    p5.push(lat.p5d);
+  }
+
+  mdlChart.data.labels           = lbl;
+  mdlChart.data.datasets[0].data = act;
+  mdlChart.data.datasets[1].data = p1;
+  mdlChart.data.datasets[2].data = p5;
+  mdlChart.update('none');
+}
+
+function refreshComp() {
+  if (!selected) return;
+  const spy  = pxHist['SPY']    || [];
+  const tick = pxHist[selected] || [];
+  const proj = prHist[selected] || [];
+  const spyB = normBase['SPY'], tkB = normBase[selected];
+
+  const n   = Math.max(spy.length, tick.length);
+  const src = spy.length >= tick.length ? spy : tick;
+  const lbl = src.map(d => d.t);
+
+  const spyN  = norm(spy.map(d  => d.v), spyB);
+  const tickN = norm(tick.map(d => d.v), tkB);
+  const path  = new Array(n).fill(null);
+
+  if (proj.length && tick.length) {
+    const lat = proj[proj.length - 1];
+    const last = tick[tick.length - 1].v;
+    const idx  = n - 1;
+    path[idx] = tkB ? +((last / tkB * 100).toFixed(3)) : null;
+    lbl.push('→1d', '→5d');
+    spyN.push(null, null); tickN.push(null, null);
+    path.push(
+      tkB ? +((lat.p1d / tkB * 100).toFixed(3)) : null,
+      tkB ? +((lat.p5d / tkB * 100).toFixed(3)) : null
+    );
+  }
+
+  cmpChart.data.labels              = lbl;
+  cmpChart.data.datasets[0].data    = spyN;
+  cmpChart.data.datasets[1].data    = tickN;
+  cmpChart.data.datasets[2].data    = path;
+  cmpChart.data.datasets[1].label   = selected + ' (actual)';
+  cmpChart.data.datasets[2].label   = selected + ' model path';
+  cmpChart.update('none');
+}
+
+// ── Table ──────────────────────────────────────────────────────────────────
+function updateTable(prices, proj) {
+  const tb = $('tbody');
+  Object.entries(prices).forEach(([t, p]) => {
+    const pr = proj[t] || {};
+    let row  = $('r-' + t);
+    if (!row) {
+      if (tb.querySelector('[colspan]')) tb.innerHTML = '';
+      row = document.createElement('tr');
+      row.id = 'r-' + t;
+      for (let i = 0; i < 8; i++) row.insertCell(i);
+      tb.appendChild(row);
+      row.onclick = () => pick(t);
+    }
+
+    const price = p.price, prev = prevPx[t];
+    const moved = prev != null && price != null && price !== prev;
+
+    row.cells[0].textContent = t;
+    row.cells[1].textContent = price != null ? '$' + f2(price) : '—';
+    row.cells[2].textContent = fp(p.change_1m);
+    row.cells[2].className   = dir(p.change_1m);
+
+    const tr = pr.trend || '';
+    row.cells[3].textContent = tr || '—';
+    row.cells[3].className   = tr === 'bullish' ? 'bull' : tr === 'bearish' ? 'bear' : 'neut';
+
+    row.cells[4].textContent = fp(pr.return_1d_pct);
+    row.cells[4].className   = dir(pr.return_1d_pct);
+    row.cells[5].textContent = pr.projected_price_1d != null ? '$' + f2(pr.projected_price_1d) : '—';
+    row.cells[6].textContent = fp(pr.return_5d_pct);
+    row.cells[6].className   = dir(pr.return_5d_pct);
+    row.cells[7].textContent = pr.projected_price_5d != null ? '$' + f2(pr.projected_price_5d) : '—';
+
+    if (moved) {
+      row.classList.remove('fup','fdn'); void row.offsetWidth;
+      row.classList.add(price > prev ? 'fup' : 'fdn');
+    }
+    prevPx[t] = price;
+  });
+}
+
+// ── Ticker selection ───────────────────────────────────────────────────────
+function pick(t) {
+  selected = t;
+  document.querySelectorAll('#tbody tr').forEach(r => r.classList.remove('sel'));
+  const row = $('r-' + t);
+  if (row) row.classList.add('sel');
+  $('model-hdr').innerHTML = `Model — <em>${t}</em>`;
+  $('comp-hdr').innerHTML  = `Comparison — SPY vs <em>${t}</em>`;
+  const err = $('ticker-err');
+  if (err) err.style.display = 'none';
+  refreshModel(); refreshComp();
+}
+
+// ── Ticker search form ─────────────────────────────────────────────────────
+function analyzeTicker() {
+  const input = $('ticker-input');
+  const err   = $('ticker-err');
+  const t     = (input.value || '').trim().toUpperCase();
+  if (!t) return false;
+
+  // If ticker is already in our price history, select it immediately
+  if (pxHist[t] && pxHist[t].length) {
+    pick(t);
+    input.value = '';
+  } else {
+    // Store as a "pending" ticker — charts will populate as data arrives
+    selected = t;
+    $('model-hdr').innerHTML = `Model — <em>${t}</em>`;
+    $('comp-hdr').innerHTML  = `Comparison — SPY vs <em>${t}</em>`;
+    err.textContent  = 'Waiting for data…';
+    err.style.color  = 'var(--yellow)';
+    err.style.display = 'inline';
+    // Clear error once data arrives
+    const check = setInterval(() => {
+      if (pxHist[t] && pxHist[t].length) {
+        pick(t);
+        input.value = '';
+        clearInterval(check);
+      }
+    }, 1000);
+    // If no data after 10s, show "not in stream"
+    setTimeout(() => {
+      if (!(pxHist[t] && pxHist[t].length)) {
+        err.textContent = 'Not in stream';
+        err.style.color = 'var(--red)';
+        clearInterval(check);
+      }
+    }, 10000);
+  }
+  return false;
+}
+
+// ── Macro strip ────────────────────────────────────────────────────────────
+let macroOnce = false;
+function updateMacro(macro) {
+  if (macroOnce && !Object.keys(macro).length) return;
+  macroOnce = true;
+  const strip = $('macro');
+  const entries = Object.entries(macro);
+  if (!entries.length) return;
+  strip.innerHTML = entries.map(([k, v]) => {
+    const lbl = k.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase());
+    return `<div class="mc"><div class="lbl">${lbl}</div><div class="val">${f2(v)}</div></div>`;
+  }).join('');
+}
+
+// ── Tape ───────────────────────────────────────────────────────────────────
+function updateTape(prices, proj) {
+  const html = Object.entries(prices).map(([t, p]) => {
+    const c = dir(p.change_1m);
+    return `<span class="ti"><b>${t}</b><span class="${c}">$${f2(p.price)} ${fp(p.change_1m)}</span></span>`;
+  }).join('');
+  $('tape').innerHTML = html + html;
+}
+
+// ── Accumulate history ─────────────────────────────────────────────────────
+function accumulate(prices, proj, serverTs) {
+  const lbl = serverTs ? serverTs.slice(11, 16) :
+    new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+
+  Object.entries(prices).forEach(([t, p]) => {
+    if (p.price == null) return;
+    if (!pxHist[t]) pxHist[t] = [];
+    ring(pxHist[t], { t: lbl, v: p.price });
+    if (normBase[t] == null) normBase[t] = p.price;
+
+    const pr = proj[t] || {};
+    if (pr.projected_price_1d != null || pr.projected_price_5d != null) {
+      if (!prHist[t]) prHist[t] = [];
+      ring(prHist[t], { t: lbl, p1d: pr.projected_price_1d, p5d: pr.projected_price_5d });
+    }
+  });
+}
+
+// ── Main handler ───────────────────────────────────────────────────────────
+function onMsg(payload) {
+  updateN++;
+  $('seq').textContent = payload.update_seq || updateN;
+  $('ts').textContent  = (payload.server_ts || '').slice(11,19) + ' UTC';
+
+  const prices = payload.prices      || {};
+  const proj   = payload.projections || {};
+  const macro  = payload.macro       || {};
+
+  accumulate(prices, proj, payload.server_ts);
+  updateTable(prices, proj);
+  updateMacro(macro);
+  refreshMarket();
+  if (selected) { refreshModel(); refreshComp(); }
+  if (updateN % 5 === 0) updateTape(prices, proj);
+}
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+let ws, delay = 1000;
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen    = () => { const d = $('ws-dot'); d.textContent='● Connected';    d.className='on';  delay=1000; setInterval(()=>ws.readyState===1&&ws.send('ping'),30000); };
+  ws.onclose   = () => { const d = $('ws-dot'); d.textContent='● Disconnected'; d.className='off'; setTimeout(connect, delay); delay=Math.min(delay*2,30000); };
+  ws.onerror   = () => {};
+  ws.onmessage = e  => { if (e.data==='pong') return; try { onMsg(JSON.parse(e.data)); } catch(_){} };
+}
+connect();
+</script>
+</body>
+</html>
