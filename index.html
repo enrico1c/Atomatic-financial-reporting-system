@@ -364,13 +364,14 @@ const MACRO_T = {               // YF ticker → display label
 const BUF = 120;
 
 // ── State ──────────────────────────────────────────────────────────────────
-let prevPx   = {};
-let pxHist   = {};
-let prHist   = {};
-let normBase = {};
-let selected = null;
-let updateN  = 0;
+let prevPx      = {};
+let pxHist      = {};
+let prHist      = {};
+let normBase    = {};
+let selected    = null;
+let updateN     = 0;
 let refreshTimer = null;
+let staticData  = null;  // cached data/market.json payload
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const $   = id => document.getElementById(id);
@@ -381,10 +382,13 @@ const dir = v  => v == null ? 'fl' : v > 0 ? 'up' : v < 0 ? 'dn' : 'fl';
 function ring(arr, item) { arr.push(item); if (arr.length > BUF) arr.shift(); }
 
 // ── CORS proxy helpers (routes around Yahoo Finance browser blocks) ────────
-// allorigins.win is a free, open CORS proxy — no API key needed.
+// Multiple proxies tried in order; first success wins.
 const PROXIES = [
-  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
-  u => 'https://corsproxy.io/?url='          + encodeURIComponent(u),
+  u => 'https://corsproxy.io/?url='                   + encodeURIComponent(u),
+  u => 'https://api.codetabs.com/v1/proxy?quest='     + encodeURIComponent(u),
+  u => 'https://thingproxy.freeboard.io/fetch/'       + u,
+  u => 'https://api.allorigins.win/raw?url='          + encodeURIComponent(u),
+  u => 'https://corsproxy.org/?url='                  + encodeURIComponent(u),
 ];
 
 async function proxyFetch(targetUrl, timeoutMs = 14000) {
@@ -410,12 +414,48 @@ const YF_QUOTES = syms =>
 const YF_CHART  = sym  =>
   `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1m&range=1d&includePrePost=false`;
 
+// Static data file (data/market.json) is pre-fetched by GitHub Actions every
+// 5 min and served from the same origin — no CORS proxy needed.
+const STATIC_MAX_AGE_MS = 10 * 60 * 1000; // accept if < 10 min old
+
+async function loadStaticData() {
+  try {
+    const r = await fetch('./data/market.json?_=' + Date.now());
+    if (!r.ok) return null;
+    const d = await r.json();
+    const age = d.updated ? Date.now() - new Date(d.updated).getTime() : Infinity;
+    if (age < STATIC_MAX_AGE_MS) { staticData = d; return d; }
+    // Keep stale data in staticData as ultimate fallback but signal caller
+    staticData = d;
+    return null; // stale — try live proxies first
+  } catch (_) { return null; }
+}
+
 async function fetchBatchQuotes(symbols) {
-  const json = await proxyFetch(YF_QUOTES(symbols));
-  return json?.quoteResponse?.result || [];
+  // 1. Try same-origin static file (no CORS; written by GitHub Actions)
+  const sd = await loadStaticData();
+  if (sd?.quoteResponse?.result?.length) return sd.quoteResponse.result;
+
+  // 2. Live CORS proxy
+  try {
+    const json = await proxyFetch(YF_QUOTES(symbols));
+    return json?.quoteResponse?.result || [];
+  } catch (e) {
+    // 3. Fall back to stale static file rather than showing nothing
+    if (staticData?.quoteResponse?.result?.length) {
+      const age = staticData.updated
+        ? Math.round((Date.now() - new Date(staticData.updated).getTime()) / 60000)
+        : '?';
+      setStatus(`⚠ Using cached data (${age} min old) — proxies unavailable`, false);
+      return staticData.quoteResponse.result;
+    }
+    throw e;
+  }
 }
 
 async function fetchChart(sym) {
+  // Serve chart from static file if available (populated by GitHub Actions)
+  if (staticData?.charts?.[sym]) return staticData.charts[sym];
   return proxyFetch(YF_CHART(sym));
 }
 
