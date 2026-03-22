@@ -608,10 +608,10 @@ function analyzeTicker() {
         clearInterval(check);
       }
     }, 1000);
-    // If no data after 10s, show "not in stream"
+    // If no data after 10s, show "not available"
     setTimeout(() => {
       if (!(pxHist[t] && pxHist[t].length)) {
-        err.textContent = 'Not in stream';
+        err.textContent = 'Not available (connect server)';
         err.style.color = 'var(--red)';
         clearInterval(check);
       }
@@ -680,16 +680,101 @@ function onMsg(payload) {
   if (updateN % 5 === 0) updateTape(prices, proj);
 }
 
+// ── Demo data (loads immediately — replaced by WebSocket when live) ─────────
+const DEMO_BASE = {
+  AAPL:  213.18, MSFT:  391.45, GOOGL: 176.32, AMZN:  197.85,
+  JPM:   238.60, GS:    534.20, BAC:     43.75, XOM:   116.40,
+  SPY:   562.30, QQQ:   483.15
+};
+const DEMO_VOL  = {
+  AAPL: .016, MSFT: .014, GOOGL: .018, AMZN: .020,
+  JPM:  .013, GS:   .016, BAC:   .014, XOM:  .015,
+  SPY:  .009, QQQ:  .012
+};
+const DEMO_MACRO = {
+  fed_funds_rate: 4.33, treasury_10y: 4.28, treasury_2y: 4.01,
+  cpi_all_urban: 314.8, unemployment_rate: 4.1, gdp_us: 29400,
+  core_pce: 2.8, consumer_sentiment: 64.7,
+  ecb_deposit_rate: 3.25, euribor_3m: 3.41
+};
+
+function loadDemoData() {
+  // Seeded PRNG so demo looks the same every reload
+  let s = 42;
+  const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd() + 1e-10)) * Math.cos(2 * Math.PI * rnd());
+
+  const BARS = 60;
+  // Build price histories
+  const prices = {}; // ticker → [price0..price59]
+  Object.entries(DEMO_BASE).forEach(([t, base]) => {
+    const vol = DEMO_VOL[t];
+    const arr = [base];
+    for (let i = 1; i < BARS; i++) arr.push(+(arr[i-1] * (1 + vol / 15 * gauss())).toFixed(4));
+    prices[t] = arr;
+  });
+
+  // Market open ~09:30, generate BARS 1-min labels
+  const start = new Date(); start.setHours(9,30,0,0);
+  const labels = Array.from({length: BARS}, (_, i) => {
+    const d = new Date(start.getTime() + i * 60000);
+    return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+  });
+
+  // Populate pxHist & normBase
+  Object.entries(prices).forEach(([t, arr]) => {
+    pxHist[t]    = arr.map((v, i) => ({ t: labels[i], v }));
+    normBase[t]  = arr[0];
+  });
+
+  // Populate prHist (projections from last bar)
+  Object.entries(prices).forEach(([t, arr]) => {
+    const last = arr[BARS - 1];
+    const r1   = (rnd() - 0.45) * 0.04;   // ±2% skewed slightly positive
+    const r5   = r1 + (rnd() - 0.45) * 0.06;
+    prHist[t]  = [{ t: labels[BARS-1], p1d: +(last*(1+r1)).toFixed(4), p5d: +(last*(1+r5)).toFixed(4) }];
+  });
+
+  // Build "current" prices object for table
+  const curPrices = {}, curProj = {};
+  Object.entries(prices).forEach(([t, arr]) => {
+    const last = arr[BARS - 1], prev = arr[BARS - 2];
+    const pr   = prHist[t][0];
+    const r1   = (pr.p1d - last) / last;
+    const r5   = (pr.p5d - last) / last;
+    const chg  = (last - prev) / prev;
+    const trend = r1 > 0.002 ? 'bullish' : r1 < -0.002 ? 'bearish' : 'neutral';
+    curPrices[t] = { price: last, change_1m: chg };
+    curProj[t]   = { return_1d_pct: r1, projected_price_1d: pr.p1d,
+                     return_5d_pct: r5, projected_price_5d: pr.p5d, trend };
+  });
+
+  updateTable(curPrices, curProj);
+  updateMacro(DEMO_MACRO);
+  updateTape(curPrices, curProj);
+  refreshMarket();
+  // Auto-select SPY so charts aren't blank
+  pick('SPY');
+}
+
 // ── WebSocket ──────────────────────────────────────────────────────────────
 let ws, delay = 1000;
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen    = () => { const d = $('ws-dot'); d.textContent='● Connected';    d.className='on';  delay=1000; setInterval(()=>ws.readyState===1&&ws.send('ping'),30000); };
-  ws.onclose   = () => { const d = $('ws-dot'); d.textContent='● Disconnected'; d.className='off'; setTimeout(connect, delay); delay=Math.min(delay*2,30000); };
+  ws.onopen    = () => {
+    const d = $('ws-dot'); d.textContent='● Live'; d.className='on';
+    delay = 1000;
+    // Clear demo data so live data starts fresh
+    pxHist = {}; prHist = {}; normBase = {}; prevPx = {}; macroOnce = false;
+    setInterval(() => ws.readyState === 1 && ws.send('ping'), 30000);
+  };
+  ws.onclose   = () => { const d = $('ws-dot'); d.textContent='● Demo mode'; d.className='off'; setTimeout(connect, delay); delay=Math.min(delay*2,30000); };
   ws.onerror   = () => {};
   ws.onmessage = e  => { if (e.data==='pong') return; try { onMsg(JSON.parse(e.data)); } catch(_){} };
 }
+
+loadDemoData();
 connect();
 </script>
 </body>
