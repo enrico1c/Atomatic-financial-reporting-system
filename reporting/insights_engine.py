@@ -48,7 +48,8 @@ class InsightsEngine:
 
         def last(col):
             if col in macro.columns:
-                return macro[col].dropna().iloc[-1]
+                s = macro[col].dropna()
+                return s.iloc[-1] if not s.empty else None
             return None
 
         def prev(col, n=1):

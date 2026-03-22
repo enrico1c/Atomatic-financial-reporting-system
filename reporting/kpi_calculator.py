@@ -191,8 +191,10 @@ class KPICalculator:
     def _get_risk_free(self) -> float:
         macro = self.data.get("macro_monthly")
         if macro is not None and "treasury_2y" in macro.columns:
-            val = macro["treasury_2y"].dropna().iloc[-1]
-            return val / 100 if val > 1 else val
+            s = macro["treasury_2y"].dropna()
+            if not s.empty:
+                val = s.iloc[-1]
+                return val / 100 if val > 1 else val
         return RISK_FREE_DEFAULT
 
     def _find_col(self, df: pd.DataFrame, candidates: list[str]) -> str | None:
