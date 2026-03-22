@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Financial Analytics Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:      #0d1117;
+      --surface: #161b22;
+      --border:  #30363d;
+      --text:    #e6edf3;
+      --muted:   #8b949e;
+      --green:   #3fb950;
+      --red:     #f85149;
+      --yellow:  #d29922;
+      --blue:    #58a6ff;
+      --purple:  #bc8cff;
+      --orange:  #f0883e;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ───────────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+
+    header h1 { font-size: 15px; font-weight: 600; color: var(--blue); }
+
+    #status-bar { display: flex; gap: 16px; font-size: 11px; color: var(--muted); }
+    #ws-status { font-weight: 600; }
+    #ws-status.connected    { color: var(--green); }
+    #ws-status.disconnected { color: var(--red); }
+
+    /* ── Ticker tape ───────────────────────────────────────────────── */
+    #tape-wrapper {
+      overflow: hidden;
+      background: rgba(0,0,0,.3);
+      border-bottom: 1px solid var(--border);
+      padding: 4px 0;
+      flex-shrink: 0;
+    }
+
+    #tape {
+      display: inline-flex;
+      gap: 32px;
+      white-space: nowrap;
+      animation: scroll-left 60s linear infinite;
+      padding: 0 20px;
+    }
+
+    @keyframes scroll-left { from { transform: translateX(0) } to { transform: translateX(-50%) } }
+
+    .tape-item { font-size: 12px; }
+    .tape-item .sym { font-weight: 700; color: var(--text); margin-right: 5px; }
+    .up   { color: var(--green); }
+    .down { color: var(--red); }
+    .flat { color: var(--muted); }
+
+    /* ── Main 2-column layout ─────────────────────────────────────── */
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 44% 1fr;
+      gap: 12px;
+      padding: 12px 16px;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    /* ── Left: table panel ────────────────────────────────────────── */
+    #table-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .panel-title {
+      padding: 8px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,.15);
+      flex-shrink: 0;
+    }
+
+    .panel-title span { color: var(--blue); font-size: 10px; margin-left: 8px; text-transform: none; letter-spacing: 0; }
+
+    #table-scroll { overflow-y: auto; flex: 1; }
+
+    table { width: 100%; border-collapse: collapse; }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      padding: 7px 10px;
+      text-align: right;
+      font-size: 10px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      white-space: nowrap;
+      z-index: 1;
+    }
+
+    thead th:first-child { text-align: left; }
+
+    tbody tr {
+      cursor: pointer;
+      transition: background .12s;
+    }
+
+    tbody tr:hover    { background: rgba(88,166,255,.06); }
+    tbody tr.selected { background: rgba(88,166,255,.12); outline: 1px solid rgba(88,166,255,.3); }
+
+    tbody td {
+      padding: 6px 10px;
+      text-align: right;
+      border-bottom: 1px solid rgba(48,54,61,.6);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      font-size: 12px;
+    }
+
+    tbody td:first-child { text-align: left; font-weight: 600; color: var(--blue); }
+
+    .trend-bullish { color: var(--green); font-weight: 600; }
+    .trend-bearish { color: var(--red);   font-weight: 600; }
+    .trend-neutral { color: var(--yellow); }
+
+    @keyframes flash-up   { 0%,100% { background:transparent } 50% { background:rgba(63,185,80,.18) } }
+    @keyframes flash-down { 0%,100% { background:transparent } 50% { background:rgba(248,81,73,.18) } }
+    .flash-up   { animation: flash-up   .6s ease; }
+    .flash-down { animation: flash-down .6s ease; }
+
+    /* Macro strip below table */
+    #macro-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1px;
+      background: var(--border);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .macro-cell {
+      background: var(--surface);
+      padding: 6px 10px;
+      flex: 1 1 110px;
+    }
+
+    .macro-cell .lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+    .macro-cell .val { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+    /* ── Right: charts column ─────────────────────────────────────── */
+    #charts-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .chart-card canvas {
+      flex: 1;
+      min-height: 0;
+      padding: 6px 10px 8px;
+    }
+
+    /* ── Footer ───────────────────────────────────────────────────── */
+    footer {
+      padding: 4px 16px;
+      text-align: right;
+      font-size: 10px;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <h1>&#9654; Financial Analytics Dashboard</h1>
+  <div id="status-bar">
+    <span>Updates: <strong id="update-seq">0</strong></span>
+    <span>Server: <strong id="server-ts">—</strong></span>
+    <span id="ws-status" class="disconnected">&#9679; Disconnected</span>
+  </div>
+</header>
+
+<!-- Ticker tape -->
+<div id="tape-wrapper">
+  <div id="tape">
+    <span class="tape-item"><span class="sym">—</span>connecting…</span>
+    <span class="tape-item"><span class="sym">—</span>connecting…</span>
+  </div>
+</div>
+
+<main>
+
+  <!-- LEFT: Excel-like table + macro strip -->
+  <div id="table-panel">
+    <div class="panel-title">
+      Live Prices &amp; ML Projections
+      <span>&#8592; click a row to analyze</span>
+    </div>
+    <div id="table-scroll">
+      <table id="prices-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Price</th>
+            <th>1m Chg%</th>
+            <th>Trend</th>
+            <th>&#8593;1d%</th>
+            <th>Price 1d</th>
+            <th>&#8593;5d%</th>
+            <th>Price 5d</th>
+          </tr>
+        </thead>
+        <tbody id="prices-body">
+          <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px">
+            Connecting to real-time stream…
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="macro-strip">
+      <div class="macro-cell">
+        <div class="lbl">Loading…</div>
+        <div class="val">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: 3 charts stacked -->
+  <div id="charts-panel">
+
+    <div class="chart-card">
+      <div class="panel-title">Market &mdash; SPY &amp; QQQ</div>
+      <canvas id="market-chart"></canvas>
+    </div>
+
+    <div class="chart-card">
+      <div class="panel-title" id="model-title">Model &mdash; <span style="color:var(--blue)">select a ticker</span></div>
+      <canvas id="model-chart"></canvas>
+    </div>
+
+    <div class="chart-card">
+      <div class="panel-title" id="comp-title">Comparison &mdash; Market vs Model</div>
+      <canvas id="comparison-chart"></canvas>
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  Analytics Dashboard &mdash; Data via Yahoo Finance &mdash; ML projections are illustrative, not financial advice.
+</footer>
+
+<script>
+// ── Config ─────────────────────────────────────────────────────────────────
+const BUFFER  = 120;          // max history points per ticker
+const MARKET_TICKERS = ['SPY', 'QQQ'];
+
+// ── State ──────────────────────────────────────────────────────────────────
+let lastPrices    = {};       // ticker -> last price (for flash)
+let priceHistory  = {};       // ticker -> [{t, price}]  ring-buffer
+let projHistory   = {};       // ticker -> [{t, p1d, p5d}]
+let selectedTicker = null;
+let seq = 0;
+
+// normalisation bases (first received price = 100)
+let normBase = {};            // ticker -> base price
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+const $    = id => document.getElementById(id);
+const fmt  = (v, d=2)  => v == null ? '—' : Number(v).toFixed(d);
+const fmtP = (v, d=2)  => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(d) + '%';
+const cls  = v  => v == null ? 'flat' : v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
+
+function pushRing(arr, item) {
+  arr.push(item);
+  if (arr.length > BUFFER) arr.shift();
+}
+
+// ── Chart.js defaults ──────────────────────────────────────────────────────
+Chart.defaults.color          = '#8b949e';
+Chart.defaults.borderColor    = '#30363d';
+Chart.defaults.font.family    = "'Segoe UI', system-ui, sans-serif";
+Chart.defaults.font.size      = 10;
+
+const BASE_OPTS = {
+  responsive: true,
+  maintainAspectRatio: false,
+  animation: { duration: 200 },
+  interaction: { mode: 'index', intersect: false },
+  plugins: {
+    legend: {
+      labels: { boxWidth: 10, padding: 12, color: '#8b949e' }
+    },
+    tooltip: {
+      backgroundColor: '#161b22',
+      borderColor: '#30363d',
+      borderWidth: 1,
+      titleColor: '#e6edf3',
+      bodyColor: '#8b949e',
+      padding: 8,
+    }
+  },
+  scales: {
+    x: {
+      ticks: { maxTicksLimit: 8, maxRotation: 0 },
+      grid: { color: 'rgba(48,54,61,.5)' }
+    },
+    y: {
+      ticks: { maxTicksLimit: 6 },
+      grid: { color: 'rgba(48,54,61,.5)' }
+    }
+  }
+};
+
+function deepMerge(target, source) {
+  const out = Object.assign({}, target);
+  for (const k in source) {
+    if (source[k] && typeof source[k] === 'object' && !Array.isArray(source[k]))
+      out[k] = deepMerge(target[k] || {}, source[k]);
+    else
+      out[k] = source[k];
+  }
+  return out;
+}
+
+// ── Market Chart (SPY + QQQ prices) ───────────────────────────────────────
+const marketChart = new Chart($('market-chart'), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      {
+        label: 'SPY',
+        data: [],
+        borderColor: '#58a6ff',
+        backgroundColor: 'rgba(88,166,255,.07)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: true,
+      },
+      {
+        label: 'QQQ',
+        data: [],
+        borderColor: '#bc8cff',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.3,
+        yAxisID: 'y2',
+      }
+    ]
+  },
+  options: deepMerge(BASE_OPTS, {
+    scales: {
+      y:  { position: 'left',  title: { display: true, text: 'SPY ($)' } },
+      y2: { position: 'right', title: { display: true, text: 'QQQ ($)' },
+            grid: { drawOnChartArea: false } }
+    }
+  })
+});
+
+// ── Model Chart (selected ticker: history + projections) ──────────────────
+const modelChart = new Chart($('model-chart'), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      {
+        label: 'Actual Price',
+        data: [],
+        borderColor: '#3fb950',
+        backgroundColor: 'rgba(63,185,80,.07)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: true,
+      },
+      {
+        label: 'Proj 1d',
+        data: [],
+        borderColor: '#f0883e',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        borderDash: [5, 4],
+        pointRadius: 3,
+        pointStyle: 'circle',
+        tension: 0,
+      },
+      {
+        label: 'Proj 5d',
+        data: [],
+        borderColor: '#d29922',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        borderDash: [8, 4],
+        pointRadius: 3,
+        pointStyle: 'rectRot',
+        tension: 0,
+      }
+    ]
+  },
+  options: deepMerge(BASE_OPTS, {
+    scales: {
+      y: { title: { display: true, text: 'Price ($)' } }
+    }
+  })
+});
+
+// ── Comparison Chart (normalised: market vs model) ─────────────────────────
+const compChart = new Chart($('comparison-chart'), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      {
+        label: 'SPY (Market)',
+        data: [],
+        borderColor: '#58a6ff',
+        backgroundColor: 'rgba(88,166,255,.07)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: true,
+      },
+      {
+        label: 'Ticker (Actual)',
+        data: [],
+        borderColor: '#3fb950',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.3,
+      },
+      {
+        label: 'Model Proj Path',
+        data: [],
+        borderColor: '#f0883e',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        borderDash: [6, 4],
+        pointRadius: 2,
+        tension: 0,
+      }
+    ]
+  },
+  options: deepMerge(BASE_OPTS, {
+    scales: {
+      y: { title: { display: true, text: 'Normalised (base=100)' } }
+    }
+  })
+});
+
+// ── Chart update helpers ───────────────────────────────────────────────────
+function normSeries(arr, base) {
+  if (!base || base === 0) return arr.map(v => null);
+  return arr.map(v => v == null ? null : parseFloat(((v / base) * 100).toFixed(3)));
+}
+
+function refreshMarketChart() {
+  const spy = priceHistory['SPY'] || [];
+  const qqq = priceHistory['QQQ'] || [];
+  const labels = spy.length >= qqq.length
+    ? spy.map(d => d.t)
+    : qqq.map(d => d.t);
+
+  marketChart.data.labels            = labels;
+  marketChart.data.datasets[0].data  = spy.map(d => d.price);
+  marketChart.data.datasets[1].data  = qqq.map(d => d.price);
+  marketChart.update('none');
+}
+
+function refreshModelChart() {
+  if (!selectedTicker) return;
+  const hist = priceHistory[selectedTicker] || [];
+  const proj = projHistory[selectedTicker]  || [];
+
+  const labels     = hist.map(d => d.t);
+  const actualData = hist.map(d => d.price);
+
+  // Projection: only the last point pair (current → 1d → 5d)
+  // Align projections to the last label index, extending forward
+  const proj1d = new Array(hist.length).fill(null);
+  const proj5d = new Array(hist.length).fill(null);
+
+  if (proj.length > 0) {
+    const latest = proj[proj.length - 1];
+    const last   = hist.length - 1;
+    // anchor at last actual price
+    if (hist.length > 0) {
+      proj1d[last] = hist[last].price;       // start
+      labels.push('→1d');
+      proj1d.push(latest.p1d);
+      proj5d.push(null);
+
+      labels.push('→5d');
+      proj1d.push(null);
+      proj5d.push(latest.p5d);
+    }
+  }
+
+  modelChart.data.labels            = labels;
+  modelChart.data.datasets[0].data  = actualData;
+  modelChart.data.datasets[1].data  = proj1d;
+  modelChart.data.datasets[2].data  = proj5d;
+  modelChart.update('none');
+}
+
+function refreshCompChart() {
+  if (!selectedTicker) return;
+
+  const spy  = priceHistory['SPY']           || [];
+  const tick = priceHistory[selectedTicker]  || [];
+  const proj = projHistory[selectedTicker]   || [];
+
+  const spyBase  = normBase['SPY'];
+  const tickBase = normBase[selectedTicker];
+
+  // Use the longer of SPY / ticker as labels
+  const n      = Math.max(spy.length, tick.length);
+  const labels = Array.from({ length: n }, (_, i) => {
+    const src = spy.length > tick.length ? spy : tick;
+    return src[i] ? src[i].t : '';
+  });
+
+  const spyNorm  = normSeries(spy.map(d  => d.price),  spyBase);
+  const tickNorm = normSeries(tick.map(d => d.price), tickBase);
+
+  // Projection path (normalised)
+  const projPath = new Array(n).fill(null);
+  if (proj.length > 0 && tick.length > 0) {
+    const latest    = proj[proj.length - 1];
+    const lastPrice = tick[tick.length - 1].price;
+
+    // anchor at last actual (normalised)
+    projPath[n - 1] = tickBase ? parseFloat(((lastPrice / tickBase) * 100).toFixed(3)) : null;
+    labels.push('→1d', '→5d');
+    spyNorm.push(null, null);
+    tickNorm.push(null, null);
+    projPath.push(
+      tickBase ? parseFloat(((latest.p1d / tickBase) * 100).toFixed(3)) : null,
+      tickBase ? parseFloat(((latest.p5d / tickBase) * 100).toFixed(3)) : null
+    );
+  }
+
+  compChart.data.labels            = labels;
+  compChart.data.datasets[0].data  = spyNorm;
+  compChart.data.datasets[1].data  = tickNorm;
+  compChart.data.datasets[2].data  = projPath;
+  compChart.data.datasets[1].label = selectedTicker + ' (Actual)';
+  compChart.data.datasets[2].label = selectedTicker + ' Proj Path';
+  compChart.update('none');
+}
+
+// ── Prices table ───────────────────────────────────────────────────────────
+function updateTable(prices, projections) {
+  const tbody = $('prices-body');
+  const tickers = Object.keys(prices);
+  if (!tickers.length) return;
+
+  tickers.forEach(ticker => {
+    const p  = prices[ticker]      || {};
+    const pr = projections[ticker] || {};
+    const rowId = 'row-' + ticker;
+    let row = document.getElementById(rowId);
+
+    if (!row) {
+      if (tbody.querySelector('[colspan]')) tbody.innerHTML = '';
+      row = document.createElement('tr');
+      row.id = rowId;
+      for (let i = 0; i < 8; i++) row.insertCell(i);
+      tbody.appendChild(row);
+
+      row.addEventListener('click', () => selectTicker(ticker));
+    }
+
+    const price = p.price;
+    const prev  = lastPrices[ticker];
+    const moved = prev != null && price != null && price !== prev;
+
+    row.cells[0].textContent = ticker;
+    row.cells[1].textContent = price != null ? '$' + fmt(price, 2) : '—';
+    row.cells[2].textContent = fmtP(p.change_1m);
+    row.cells[2].className   = cls(p.change_1m);
+
+    const trend = pr.trend || '';
+    row.cells[3].textContent = trend || '—';
+    row.cells[3].className   = 'trend-' + (trend || 'neutral');
+
+    row.cells[4].textContent = fmtP(pr.return_1d_pct);
+    row.cells[4].className   = cls(pr.return_1d_pct);
+    row.cells[5].textContent = pr.projected_price_1d != null ? '$' + fmt(pr.projected_price_1d, 2) : '—';
+    row.cells[6].textContent = fmtP(pr.return_5d_pct);
+    row.cells[6].className   = cls(pr.return_5d_pct);
+    row.cells[7].textContent = pr.projected_price_5d != null ? '$' + fmt(pr.projected_price_5d, 2) : '—';
+
+    if (moved) {
+      row.classList.remove('flash-up', 'flash-down');
+      void row.offsetWidth;
+      row.classList.add(price > prev ? 'flash-up' : 'flash-down');
+    }
+
+    lastPrices[ticker] = price;
+  });
+}
+
+// ── Ticker selection ───────────────────────────────────────────────────────
+function selectTicker(ticker) {
+  selectedTicker = ticker;
+
+  // Highlight row
+  document.querySelectorAll('#prices-body tr').forEach(r => r.classList.remove('selected'));
+  const row = $('row-' + ticker);
+  if (row) row.classList.add('selected');
+
+  $('model-title').innerHTML = `Model &mdash; <span style="color:var(--blue)">${ticker}</span>`;
+  $('comp-title').innerHTML  = `Comparison &mdash; SPY vs <span style="color:var(--blue)">${ticker}</span>`;
+
+  refreshModelChart();
+  refreshCompChart();
+}
+
+// ── Macro strip ────────────────────────────────────────────────────────────
+let macroRendered = false;
+function updateMacro(macro) {
+  if (macroRendered && !Object.keys(macro).length) return;
+  macroRendered = true;
+  const strip = $('macro-strip');
+  strip.innerHTML = '';
+  const entries = Object.entries(macro);
+  if (!entries.length) {
+    strip.innerHTML = '<div class="macro-cell"><div class="lbl">No macro</div><div class="val">—</div></div>';
+    return;
+  }
+  entries.forEach(([k, v]) => {
+    const label = k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    strip.innerHTML += `
+      <div class="macro-cell">
+        <div class="lbl">${label}</div>
+        <div class="val">${fmt(v, 2)}</div>
+      </div>`;
+  });
+}
+
+// ── Ticker tape ────────────────────────────────────────────────────────────
+function updateTape(prices, projections) {
+  const items = Object.entries(prices).map(([t, p]) => {
+    const pr   = projections[t] || {};
+    const price = p.price != null ? '$' + fmt(p.price, 2) : '—';
+    const chg   = fmtP(p.change_1m);
+    const c     = cls(p.change_1m);
+    return `<span class="tape-item"><span class="sym">${t}</span><span class="${c}">${price} ${chg}</span></span>`;
+  }).join('');
+  $('tape').innerHTML = items + items;
+}
+
+// ── Accumulate price & projection history ──────────────────────────────────
+function accumulateHistory(prices, projections, ts) {
+  const label = ts ? ts.slice(11, 16) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  Object.entries(prices).forEach(([ticker, p]) => {
+    if (p.price == null) return;
+
+    if (!priceHistory[ticker]) priceHistory[ticker] = [];
+    pushRing(priceHistory[ticker], { t: label, price: p.price });
+
+    // Set normalisation base on first point
+    if (normBase[ticker] == null) normBase[ticker] = p.price;
+
+    // Projections
+    const pr = projections[ticker] || {};
+    if (pr.projected_price_1d != null || pr.projected_price_5d != null) {
+      if (!projHistory[ticker]) projHistory[ticker] = [];
+      pushRing(projHistory[ticker], {
+        t:   label,
+        p1d: pr.projected_price_1d,
+        p5d: pr.projected_price_5d
+      });
+    }
+  });
+}
+
+// ── Main message handler ───────────────────────────────────────────────────
+function onMessage(payload) {
+  seq++;
+  $('update-seq').textContent = payload.update_seq || seq;
+  $('server-ts').textContent  = (payload.server_ts || '').slice(11, 19) + ' UTC';
+
+  const prices      = payload.prices      || {};
+  const projections = payload.projections || {};
+  const macro       = payload.macro       || {};
+
+  accumulateHistory(prices, projections, payload.server_ts);
+  updateTable(prices, projections);
+  updateMacro(macro);
+
+  // Refresh charts
+  refreshMarketChart();
+  if (selectedTicker) {
+    refreshModelChart();
+    refreshCompChart();
+  }
+
+  // Tape every 5 updates
+  if (seq % 5 === 0) updateTape(prices, projections);
+}
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+let ws, reconnectDelay = 1000;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url   = `${proto}://${location.host}/ws`;
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    $('ws-status').textContent = '● Connected';
+    $('ws-status').className   = 'connected';
+    reconnectDelay = 1000;
+    setInterval(() => { if (ws.readyState === 1) ws.send('ping'); }, 30000);
+  };
+
+  ws.onmessage = evt => {
+    if (evt.data === 'pong') return;
+    try { onMessage(JSON.parse(evt.data)); }
+    catch(e) { console.warn('Parse error:', e); }
+  };
+
+  ws.onclose = () => {
+    $('ws-status').textContent = '● Disconnected';
+    $('ws-status').className   = 'disconnected';
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+  };
+
+  ws.onerror = () => {};
+}
+
+connect();
+</script>
+
+</body>
+</html>
