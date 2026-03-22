@@ -40,10 +40,18 @@ def parse_args():
     p = argparse.ArgumentParser(description="Financial automation system")
     p.add_argument("--no-fetch",    action="store_true", help="Use cached raw data")
     p.add_argument("--report-only", action="store_true", help="Skip fetch+transform, rebuild reports")
+    p.add_argument(
+        "--tickers", nargs="+", metavar="TICKER",
+        help="Override price tickers (e.g. --tickers TSLA NVDA BTC-USD)",
+    )
+    p.add_argument(
+        "--statements", nargs="+", metavar="TICKER",
+        help="Override tickers for financial statements (e.g. --statements TSLA NVDA)",
+    )
     return p.parse_args()
 
 
-def ingest(skip_fetch: bool) -> dict[str, pd.DataFrame]:
+def ingest(skip_fetch: bool, price_tickers=None, statement_tickers=None) -> dict[str, pd.DataFrame]:
     """Step 1: Data ingestion from all sources."""
     raw: dict[str, pd.DataFrame] = {}
 
@@ -64,7 +72,10 @@ def ingest(skip_fetch: bool) -> dict[str, pd.DataFrame]:
     # Yahoo Finance
     log.info("=== Ingesting Yahoo Finance ===")
     try:
-        yf_data = YahooFinanceIngestion().fetch()
+        yf_data = YahooFinanceIngestion(
+            price_tickers=price_tickers,
+            statement_tickers=statement_tickers,
+        ).fetch()
         raw.update(yf_data)
         log.info(f"Yahoo Finance: {list(yf_data.keys())}")
     except Exception as e:
@@ -163,7 +174,11 @@ def run(args):
                 log.error("No clean data found. Run without --report-only first.")
                 sys.exit(1)
         else:
-            raw   = ingest(skip_fetch=args.no_fetch)
+            raw   = ingest(
+                skip_fetch=args.no_fetch,
+                price_tickers=args.tickers,
+                statement_tickers=args.statements,
+            )
             clean = transform(raw)
 
         # -- Compute

@@ -25,8 +25,10 @@ from utils.date_utils import n_years_ago, today
 
 
 class YahooFinanceIngestion(BaseIngestion):
-    def __init__(self):
+    def __init__(self, price_tickers: list[str] | None = None, statement_tickers: list[str] | None = None):
         super().__init__("yahoo")
+        self.price_tickers = price_tickers if price_tickers is not None else PRICE_TICKERS
+        self.statement_tickers = statement_tickers if statement_tickers is not None else STATEMENT_TICKERS
 
     # ── Public ─────────────────────────────────────────────────────────────────
     def fetch(self) -> dict[str, pd.DataFrame]:
@@ -40,7 +42,7 @@ class YahooFinanceIngestion(BaseIngestion):
             results["prices"] = prices
 
         # Financial statements per ticker
-        for ticker in STATEMENT_TICKERS:
+        for ticker in self.statement_tickers:
             stmts = self._fetch_statements(ticker)
             for stmt_name, df in stmts.items():
                 if df is not None and not df.empty:
@@ -55,10 +57,10 @@ class YahooFinanceIngestion(BaseIngestion):
     def _fetch_prices(self) -> pd.DataFrame:
         start = n_years_ago(PRICE_HISTORY_YEARS)
         end = today()
-        self.logger.info(f"Fetching prices for {PRICE_TICKERS} from {start} to {end}")
+        self.logger.info(f"Fetching prices for {self.price_tickers} from {start} to {end}")
         try:
             df = yf.download(
-                PRICE_TICKERS,
+                self.price_tickers,
                 start=start,
                 end=end,
                 auto_adjust=True,
