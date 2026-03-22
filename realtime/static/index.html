@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Financial Real-Time Monitor</title>
+  <style>
+    :root {
+      --bg:       #0d1117;
+      --surface:  #161b22;
+      --border:   #30363d;
+      --text:     #e6edf3;
+      --muted:    #8b949e;
+      --green:    #3fb950;
+      --red:      #f85149;
+      --yellow:   #d29922;
+      --blue:     #58a6ff;
+      --purple:   #bc8cff;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    header h1 { font-size: 16px; font-weight: 600; color: var(--blue); }
+
+    #status-bar {
+      display: flex;
+      gap: 16px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    #ws-status { font-weight: 600; }
+    #ws-status.connected    { color: var(--green); }
+    #ws-status.disconnected { color: var(--red); }
+
+    main {
+      padding: 16px 20px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto auto;
+      gap: 16px;
+    }
+
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    section h2 {
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,.15);
+    }
+
+    /* Prices table */
+    #prices-section { grid-column: 1 / -1; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead th {
+      padding: 8px 12px;
+      text-align: right;
+      font-size: 11px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    thead th:first-child { text-align: left; }
+
+    tbody tr { transition: background .15s; }
+    tbody tr:hover { background: rgba(255,255,255,.03); }
+
+    tbody td {
+      padding: 7px 12px;
+      text-align: right;
+      border-bottom: 1px solid rgba(48,54,61,.6);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    tbody td:first-child { text-align: left; font-weight: 600; }
+
+    .up   { color: var(--green); }
+    .down { color: var(--red); }
+    .flat { color: var(--muted); }
+
+    .trend-bullish { color: var(--green); }
+    .trend-bearish { color: var(--red); }
+    .trend-neutral { color: var(--yellow); }
+
+    /* Flash effect on price update */
+    @keyframes flash-up   { 0%,100% { background:transparent } 50% { background:rgba(63,185,80,.18) } }
+    @keyframes flash-down { 0%,100% { background:transparent } 50% { background:rgba(248,81,73,.18) } }
+    .flash-up   { animation: flash-up   .6s ease; }
+    .flash-down { animation: flash-down .6s ease; }
+
+    /* Macro panel */
+    #macro-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 1px;
+      background: var(--border);
+    }
+
+    .macro-item {
+      background: var(--surface);
+      padding: 10px 12px;
+    }
+
+    .macro-item .label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .4px;
+      margin-bottom: 4px;
+    }
+
+    .macro-item .value {
+      font-size: 15px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Log panel */
+    #log-section { grid-column: 1 / -1; }
+
+    #log-box {
+      height: 140px;
+      overflow-y: auto;
+      padding: 8px 12px;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    #log-box .log-line { margin: 1px 0; }
+    #log-box .log-line.info { color: var(--blue); }
+    #log-box .log-line.warn { color: var(--yellow); }
+
+    /* Ticker tape */
+    #tape-wrapper {
+      overflow: hidden;
+      background: rgba(0,0,0,.25);
+      border-top: 1px solid var(--border);
+      padding: 5px 0;
+    }
+
+    #tape {
+      display: inline-flex;
+      gap: 32px;
+      white-space: nowrap;
+      animation: scroll-left 60s linear infinite;
+      padding: 0 20px;
+    }
+
+    @keyframes scroll-left { from { transform: translateX(0) } to { transform: translateX(-50%) } }
+
+    .tape-item { font-size: 12px; }
+    .tape-item .sym { font-weight: 700; color: var(--text); margin-right: 6px; }
+
+    footer {
+      padding: 6px 20px;
+      text-align: right;
+      font-size: 10px;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>&#9654; Financial Real-Time Monitor</h1>
+  <div id="status-bar">
+    <span>Updates: <strong id="update-seq">0</strong></span>
+    <span>Server: <strong id="server-ts">—</strong></span>
+    <span id="ws-status" class="disconnected">&#9679; Disconnected</span>
+  </div>
+</header>
+
+<!-- Ticker tape -->
+<div id="tape-wrapper">
+  <div id="tape">
+    <span class="tape-item"><span class="sym">—</span>connecting…</span>
+    <!-- duplicated for seamless loop -->
+    <span class="tape-item"><span class="sym">—</span>connecting…</span>
+  </div>
+</div>
+
+<main>
+
+  <!-- Price + Projection Table -->
+  <section id="prices-section">
+    <h2>Live Prices &amp; ML Projections</h2>
+    <table id="prices-table">
+      <thead>
+        <tr>
+          <th>Ticker</th>
+          <th>Price</th>
+          <th>1m Chg%</th>
+          <th>Trend</th>
+          <th>Proj 1d Ret%</th>
+          <th>Proj Price 1d</th>
+          <th>Proj 5d Ret%</th>
+          <th>Proj Price 5d</th>
+          <th>Data TS</th>
+        </tr>
+      </thead>
+      <tbody id="prices-body">
+        <tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px">
+          Connecting to real-time stream…
+        </td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Macro Panel -->
+  <section>
+    <h2>Macro Snapshot (latest)</h2>
+    <div id="macro-grid">
+      <div class="macro-item">
+        <div class="label">Loading…</div>
+        <div class="value">—</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Raw JSON output (second output) -->
+  <section>
+    <h2>Raw Stream Output (every second)</h2>
+    <div id="log-box">
+      <div class="log-line info">Waiting for stream…</div>
+    </div>
+  </section>
+
+  <!-- Event log -->
+  <section id="log-section">
+    <h2>Connection Log</h2>
+    <div id="event-log" style="height:100px;overflow-y:auto;padding:8px 12px;font-size:11px;color:var(--muted);line-height:1.6">
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Financial Real-Time Monitor &mdash; Data via Yahoo Finance &mdash; ML projections are illustrative, not financial advice.
+</footer>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let lastPrices = {};
+  let seq = 0;
+  const MAX_LOG = 50;
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  const $ = id => document.getElementById(id);
+  const fmt  = (v, d=2) => v == null ? '—' : Number(v).toFixed(d);
+  const fmtP = (v, d=3) => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(d) + '%';
+  const cls  = v => v == null ? 'flat' : v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
+
+  function logEvent(msg, type='') {
+    const box = $('event-log');
+    const el = document.createElement('div');
+    el.className = 'log-line ' + type;
+    el.textContent = new Date().toLocaleTimeString() + ' — ' + msg;
+    box.prepend(el);
+    while (box.children.length > MAX_LOG) box.removeChild(box.lastChild);
+  }
+
+  // ── Prices table ───────────────────────────────────────────────────────────
+  function updatePrices(prices, projections) {
+    const tbody = $('prices-body');
+    const tickers = Object.keys(prices);
+    if (!tickers.length) return;
+
+    tickers.forEach(ticker => {
+      const p   = prices[ticker]       || {};
+      const pr  = projections[ticker]  || {};
+      const rowId = 'row-' + ticker;
+      let row = document.getElementById(rowId);
+
+      if (!row) {
+        if (tbody.firstChild && tbody.firstChild.colSpan) tbody.innerHTML = '';
+        row = tbody.insertRow(-1);
+        row.id = rowId;
+        for (let i = 0; i < 9; i++) row.insertCell(i);
+      }
+
+      const price = p.price;
+      const prev  = lastPrices[ticker];
+      const priceMoved = prev != null && price != null && price !== prev;
+
+      row.cells[0].textContent = ticker;
+      row.cells[1].textContent = price != null ? '$' + fmt(price, 4) : '—';
+      row.cells[2].textContent = fmtP(p.change_1m);
+      row.cells[2].className   = cls(p.change_1m);
+
+      const trend = pr.trend || '';
+      row.cells[3].textContent = trend || '—';
+      row.cells[3].className   = 'trend-' + (trend || 'neutral');
+
+      row.cells[4].textContent = fmtP(pr.return_1d_pct);
+      row.cells[4].className   = cls(pr.return_1d_pct);
+      row.cells[5].textContent = pr.projected_price_1d != null ? '$' + fmt(pr.projected_price_1d, 4) : '—';
+      row.cells[6].textContent = fmtP(pr.return_5d_pct);
+      row.cells[6].className   = cls(pr.return_5d_pct);
+      row.cells[7].textContent = pr.projected_price_5d != null ? '$' + fmt(pr.projected_price_5d, 4) : '—';
+      row.cells[8].textContent = p.data_ts ? p.data_ts.slice(11, 19) + ' UTC' : '—';
+
+      // Flash animation
+      if (priceMoved) {
+        row.classList.remove('flash-up', 'flash-down');
+        void row.offsetWidth; // reflow
+        row.classList.add(price > prev ? 'flash-up' : 'flash-down');
+      }
+
+      lastPrices[ticker] = price;
+    });
+  }
+
+  // ── Macro panel ────────────────────────────────────────────────────────────
+  let macroRendered = false;
+  function updateMacro(macro) {
+    if (macroRendered && Object.keys(macro).length === 0) return;
+    macroRendered = true;
+    const grid = $('macro-grid');
+    grid.innerHTML = '';
+    const entries = Object.entries(macro);
+    if (!entries.length) {
+      grid.innerHTML = '<div class="macro-item"><div class="label">No macro data</div><div class="value">—</div></div>';
+      return;
+    }
+    entries.forEach(([k, v]) => {
+      const label = k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      grid.innerHTML += `
+        <div class="macro-item">
+          <div class="label">${label}</div>
+          <div class="value">${fmt(v, 4)}</div>
+        </div>`;
+    });
+  }
+
+  // ── Raw stream log (second output) ────────────────────────────────────────
+  function updateRawLog(payload) {
+    const box = $('log-box');
+    const json = JSON.stringify(payload, null, 2);
+    // Show only last 20 lines to avoid DOM overload
+    const lines = json.split('\n').slice(0, 30).join('\n');
+    box.innerHTML = `<pre style="color:var(--muted)">${lines}\n...</pre>`;
+  }
+
+  // ── Ticker tape ────────────────────────────────────────────────────────────
+  function updateTape(prices, projections) {
+    const items = Object.entries(prices).map(([t, p]) => {
+      const pr    = projections[t] || {};
+      const price = p.price != null ? '$' + fmt(p.price, 2) : '—';
+      const chg   = fmtP(p.change_1m);
+      const c     = cls(p.change_1m);
+      return `<span class="tape-item"><span class="sym">${t}</span><span class="${c}">${price} ${chg}</span></span>`;
+    }).join('');
+    // Double for seamless loop
+    $('tape').innerHTML = items + items;
+  }
+
+  // ── Main handler ───────────────────────────────────────────────────────────
+  function onMessage(payload) {
+    seq++;
+    $('update-seq').textContent = payload.update_seq || seq;
+    $('server-ts').textContent  = (payload.server_ts || '').slice(11, 19) + ' UTC';
+
+    const prices      = payload.prices      || {};
+    const projections = payload.projections || {};
+    const macro       = payload.macro       || {};
+
+    updatePrices(prices, projections);
+    updateMacro(macro);
+    updateRawLog(payload);
+    if (seq % 5 === 0) updateTape(prices, projections); // tape refresh every 5s
+  }
+
+  // ── WebSocket ──────────────────────────────────────────────────────────────
+  let ws, reconnectDelay = 1000;
+
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const url   = `${proto}://${location.host}/ws`;
+
+    ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      $('ws-status').textContent = '● Connected';
+      $('ws-status').className   = 'connected';
+      reconnectDelay = 1000;
+      logEvent('Connected to ' + url, 'info');
+      // Keep-alive ping every 30s
+      setInterval(() => { if (ws.readyState === 1) ws.send('ping'); }, 30000);
+    };
+
+    ws.onmessage = evt => {
+      if (evt.data === 'pong') return;
+      try { onMessage(JSON.parse(evt.data)); }
+      catch(e) { logEvent('Parse error: ' + e, 'warn'); }
+    };
+
+    ws.onclose = () => {
+      $('ws-status').textContent = '● Disconnected';
+      $('ws-status').className   = 'disconnected';
+      logEvent(`Disconnected — reconnecting in ${reconnectDelay/1000}s`, 'warn');
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+    };
+
+    ws.onerror = err => logEvent('WebSocket error', 'warn');
+  }
+
+  connect();
+</script>
+
+</body>
+</html>

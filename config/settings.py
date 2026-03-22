@@ -14,7 +14,9 @@ CLEAN_DIR = DATA_DIR / "clean"
 OUTPUT_DIR = DATA_DIR / "output"
 LOG_DIR = BASE_DIR / "logs"
 
-for d in [RAW_DIR, CLEAN_DIR, OUTPUT_DIR, LOG_DIR]:
+MODEL_DIR = DATA_DIR / "models"
+
+for d in [RAW_DIR, CLEAN_DIR, OUTPUT_DIR, LOG_DIR, MODEL_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # ─── Yahoo Finance ─────────────────────────────────────────────────────────────
@@ -90,3 +92,18 @@ THRESHOLDS = {
 # "daily" or "monthly"
 REFRESH_FREQUENCY = "daily"
 DAILY_RUN_TIME = "07:00"   # 24h format, server local time
+
+# ─── Real-time server ──────────────────────────────────────────────────────────
+# Seconds between Yahoo Finance API calls (respect rate limits)
+RT_FETCH_INTERVAL = 15
+# Number of recent 1-min bars to keep in memory per ticker
+RT_PRICE_WINDOW = 120
+# WebSocket server defaults
+RT_HOST = "0.0.0.0"
+RT_PORT = 8000
+
+# ─── ML models ────────────────────────────────────────────────────────────────
+# Minimum data points required to build features
+ML_MIN_BARS = 30
+# Training horizons (do not change without updating trainer.py)
+ML_HORIZONS = ["1d", "5d"]
