@@ -380,47 +380,62 @@ const dir = v  => v == null ? 'fl' : v > 0 ? 'up' : v < 0 ? 'dn' : 'fl';
 
 function ring(arr, item) { arr.push(item); if (arr.length > BUF) arr.shift(); }
 
-// ── Yahoo Finance API (no key required) ───────────────────────────────────
-// Try query1 first, then query2 (Yahoo's load-balanced mirrors)
-const YF = (sym, interval='1m', range='1d') =>
-  `/v8/finance/chart/${encodeURIComponent(sym)}?interval=${interval}&range=${range}&includePrePost=false`;
+// ── CORS proxy helpers (routes around Yahoo Finance browser blocks) ────────
+// allorigins.win is a free, open CORS proxy — no API key needed.
+const PROXIES = [
+  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+  u => 'https://corsproxy.io/?url='          + encodeURIComponent(u),
+];
 
-async function yfFetch(sym, interval='1m', range='1d') {
-  const path = YF(sym, interval, range);
-  const hosts = [
-    'https://query1.finance.yahoo.com',
-    'https://query2.finance.yahoo.com',
-  ];
+async function proxyFetch(targetUrl, timeoutMs = 14000) {
   let lastErr;
-  for (const host of hosts) {
+  for (const proxy of PROXIES) {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const r = await fetch(host + path, { headers: { Accept: 'application/json' } });
+      const r = await fetch(proxy(targetUrl), { signal: ctrl.signal });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return await r.json();
     } catch (e) { lastErr = e; }
+    finally     { clearTimeout(timer); }
   }
   throw lastErr;
 }
 
-// ── Parse Yahoo Finance chart response → history array ────────────────────
+// ── Yahoo Finance endpoints ────────────────────────────────────────────────
+// ONE batch call returns current quotes for up to ~200 symbols at once.
+const YF_QUOTES = syms =>
+  `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${syms.join(',')}`;
+// Per-symbol intraday chart (fetched lazily for charts only).
+const YF_CHART  = sym  =>
+  `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1m&range=1d&includePrePost=false`;
+
+async function fetchBatchQuotes(symbols) {
+  const json = await proxyFetch(YF_QUOTES(symbols));
+  return json?.quoteResponse?.result || [];
+}
+
+async function fetchChart(sym) {
+  return proxyFetch(YF_CHART(sym));
+}
+
+// ── Parse chart response → [{t, v}] ──────────────────────────────────────
 function parseYFChart(json) {
   const res = json?.chart?.result?.[0];
   if (!res) return [];
   const ts     = res.timestamp || [];
   const closes = res.indicators?.quote?.[0]?.close || [];
-  const out = [];
+  const out    = [];
   for (let i = 0; i < ts.length; i++) {
     if (closes[i] == null) continue;
     const d   = new Date(ts[i] * 1000);
     const lbl = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
     out.push({ t: lbl, v: +closes[i].toFixed(4) });
   }
-  return out.slice(-BUF);  // keep last BUF bars
+  return out.slice(-BUF);
 }
 
-// ── Simple momentum projection (transparent — no ML needed) ───────────────
-// Uses the average per-bar return over the last N bars, extrapolated forward.
-// Result is capped to ±5% (1d) / ±12% (5d) for realism.
+// ── Momentum projection (capped, based on today's actual move) ────────────
 function project(vals, barsAhead) {
   const n   = Math.min(vals.length, 20);
   if (n < 2) return vals[vals.length - 1];
@@ -433,65 +448,112 @@ function project(vals, barsAhead) {
   return +(pts[pts.length - 1] * (1 + ret)).toFixed(4);
 }
 
+// Project directly from a daily change % (used when we only have batch quote)
+function projectFromDayChange(price, prevClose, barsAhead) {
+  const dailyRet = prevClose > 0 ? (price - prevClose) / prevClose : 0;
+  // Dampen: momentum decays toward 0 over multi-day horizon
+  const factor   = barsAhead <= 390 ? 1.0 : Math.min(barsAhead / 390, 3) * 0.4;
+  const cap      = barsAhead <= 390 ? 0.05 : 0.12;
+  const ret      = Math.max(-cap, Math.min(cap, dailyRet * factor));
+  return +(price * (1 + ret)).toFixed(4);
+}
+
+// ── Load real intraday chart for specific symbols (for charts) ────────────
+async function loadChartData(symbols) {
+  for (const sym of symbols) {
+    if ((pxHist[sym] || []).length > 10) continue; // already cached
+    try {
+      const json = await fetchChart(sym);
+      const hist = parseYFChart(json);
+      if (hist.length > 2) {
+        pxHist[sym]  = hist;
+        normBase[sym] = normBase[sym] ?? hist[0].v;
+        if (EQUITY.includes(sym)) {
+          const vals = hist.map(d => d.v);
+          const p1d  = project(vals, 390);
+          const p5d  = project(vals, 1950);
+          prHist[sym] = [{ t: hist[hist.length-1].t, p1d, p5d }];
+        }
+      }
+    } catch (e) { console.warn('Chart load failed:', sym, e.message); }
+  }
+}
+
 // ── Main data load / refresh ───────────────────────────────────────────────
 async function loadData() {
   setStatus('Fetching market data…', false);
 
+  // Step 1: ONE batch request for all quotes (equity + macro) through CORS proxy
   const allSyms = [...EQUITY, ...Object.keys(MACRO_T)];
-  const results = await Promise.allSettled(allSyms.map(s => yfFetch(s)));
-
-  const prices = {}, projections = {}, macroDisplay = {};
-  let loaded = 0;
-
-  results.forEach((res, i) => {
-    const sym = allSyms[i];
-    if (res.status !== 'fulfilled') {
-      console.warn('Failed:', sym, res.reason?.message);
-      return;
-    }
-    const hist = parseYFChart(res.value);
-    if (!hist.length) return;
-
-    loaded++;
-    pxHist[sym]   = hist;
-    // Only set base on first load (don't reset on refresh)
-    if (normBase[sym] == null) normBase[sym] = hist[0].v;
-
-    const vals = hist.map(d => d.v);
-    const last = vals[vals.length - 1];
-    const prev = vals.length > 1 ? vals[vals.length - 2] : last;
-
-    if (EQUITY.includes(sym)) {
-      const p1d   = project(vals, 390);   // 390 min ≈ 1 trading day
-      const p5d   = project(vals, 1950);  // 1950 min ≈ 5 trading days
-      const r1    = (p1d - last) / last;
-      const r5    = (p5d - last) / last;
-      const trend = r1 > 0.002 ? 'bullish' : r1 < -0.002 ? 'bearish' : 'neutral';
-
-      prHist[sym]      = [{ t: hist[hist.length - 1].t, p1d, p5d }];
-      prices[sym]      = { price: last, change_1m: (last - prev) / prev };
-      projections[sym] = { return_1d_pct: r1, projected_price_1d: p1d,
-                           return_5d_pct: r5, projected_price_5d: p5d, trend };
-    } else {
-      macroDisplay[MACRO_T[sym]] = last;
-    }
-  });
-
-  if (!loaded) {
-    setStatus('⚠ Could not fetch data — Yahoo Finance may be blocking requests from this browser.', false);
+  let quotes;
+  try {
+    quotes = await fetchBatchQuotes(allSyms);
+  } catch (e) {
+    setStatus('⚠ CORS proxy unreachable — ' + e.message, false);
+    console.error(e);
     return;
   }
+
+  if (!quotes.length) {
+    setStatus('⚠ Yahoo Finance returned no data.', false);
+    return;
+  }
+
+  const prices = {}, projections = {}, macroDisplay = {};
+
+  quotes.forEach(q => {
+    const sym      = q.symbol;
+    const price    = q.regularMarketPrice;
+    if (price == null) return;
+
+    const chgAbs   = q.regularMarketChange   || 0;
+    const chgPct   = (q.regularMarketChangePercent || 0) / 100;
+    const prevClose = price - chgAbs;
+    const now = new Date();
+    const lbl = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
+
+    if (EQUITY.includes(sym)) {
+      const p1d  = projectFromDayChange(price, prevClose, 390);
+      const p5d  = projectFromDayChange(price, prevClose, 1950);
+      const r1   = (p1d - price) / price;
+      const r5   = (p5d - price) / price;
+      const trend = r1 > 0.002 ? 'bullish' : r1 < -0.002 ? 'bearish' : 'neutral';
+
+      prices[sym]      = { price, change_1m: chgPct };
+      projections[sym] = { return_1d_pct: r1, projected_price_1d: p1d,
+                           return_5d_pct: r5, projected_price_5d: p5d, trend };
+
+      // Seed a 2-bar history (prev close → now) so charts are never empty
+      if (!normBase[sym]) {
+        normBase[sym] = prevClose;
+        pxHist[sym]   = [{ t: 'prev', v: prevClose }, { t: lbl, v: price }];
+        prHist[sym]   = [{ t: lbl, p1d, p5d }];
+      } else {
+        // On refresh: append latest price
+        ring(pxHist[sym], { t: lbl, v: price });
+        prHist[sym] = [{ t: lbl, p1d, p5d }];
+      }
+    } else if (sym in MACRO_T) {
+      macroDisplay[MACRO_T[sym]] = price;
+    }
+  });
 
   updateTable(prices, projections);
   updateMacro(macroDisplay);
   updateTape(prices, projections);
+
+  // Step 2: fetch real intraday charts for SPY + QQQ (market chart) + selected
+  const chartsNeeded = ['SPY', 'QQQ'];
+  if (selected && !chartsNeeded.includes(selected)) chartsNeeded.push(selected);
+  await loadChartData(chartsNeeded);
+
   refreshMarket();
   if (selected) { refreshModel(); refreshComp(); }
   else if (pxHist['SPY']) pick('SPY');
 
   updateN++;
-  $('seq').textContent = loaded;
-  setStatus(`Updated ${new Date().toLocaleTimeString()} · ${loaded} symbols`, true);
+  $('seq').textContent = quotes.length;
+  setStatus(`Updated ${new Date().toLocaleTimeString()} · ${quotes.length} symbols`, true);
 }
 
 function setStatus(msg, ok) {
@@ -701,7 +763,7 @@ function updateTable(prices, proj) {
 }
 
 // ── Ticker selection ───────────────────────────────────────────────────────
-function pick(t) {
+async function pick(t) {
   selected = t;
   document.querySelectorAll('#tbody tr').forEach(r => r.classList.remove('sel'));
   const row = $('r-' + t);
@@ -710,6 +772,12 @@ function pick(t) {
   $('comp-hdr').innerHTML  = `Comparison — SPY vs <em>${t}</em>`;
   const err = $('ticker-err');
   if (err) err.style.display = 'none';
+  // Lazy-load full intraday chart if we only have the 2-bar seed
+  if ((pxHist[t] || []).length < 10) {
+    await loadChartData([t]);
+    // Also ensure SPY chart loaded for comparison
+    await loadChartData(['SPY']);
+  }
   refreshModel(); refreshComp();
 }
 
@@ -726,10 +794,10 @@ async function analyzeTicker() {
     return false;
   }
 
-  // Fetch from Yahoo Finance on demand
+  // Fetch from Yahoo Finance on demand (via CORS proxy)
   err.textContent = 'Fetching…'; err.style.color = 'var(--yellow)'; err.style.display = 'inline';
   try {
-    const json = await yfFetch(t);
+    const json = await fetchChart(t);
     const hist = parseYFChart(json);
     if (!hist.length) throw new Error('No data');
 
